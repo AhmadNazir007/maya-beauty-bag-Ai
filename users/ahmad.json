@@ -1,0 +1,85 @@
+{
+  "user_id": "ahmad",
+  "orders": [
+    {
+      "bag": "The Soft Reset",
+      "products": [
+        "Dewy Primer",
+        "Volume Mascara",
+        "Clear Gloss"
+      ],
+      "affirmation": "You are your own light",
+      "date": "2025-07-15"
+    },
+    {
+      "bag": "The Power Pouch",
+      "products": [
+        "Matte Foundation",
+        "Bold Eyeliner",
+        "Fire Red Lipstick"
+      ],
+      "affirmation": "This moment is yours. Claim it.",
+      "date": "2025-07-15"
+    },
+    {
+      "bag": "The Soft Reset",
+      "products": [
+        "Dewy Primer",
+        "Bold Eyeliner",
+        "Lipstick"
+      ],
+      "affirmation": "You weren't made to shrink.",
+      "date": "2025-07-15"
+    },
+    {
+      "bag": "The Bold Bag",
+      "products": [
+        "Foundation",
+        "Eyeliner",
+        "Lipstick"
+      ],
+      "affirmation": "You weren't made to shrink.",
+      "date": "2025-07-16"
+    },
+    {
+      "bag": "The Soft Reset",
+      "products": [
+        "Primer",
+        "Eyeliner",
+        "Lipstick"
+      ],
+      "affirmation": "You're allowed to take up space in stillness.",
+      "date": "2025-07-16"
+    },
+    {
+      "bag": "The Glow Ritual",
+      "products": [
+        "Dewy Primer",
+        "Mascara",
+        "Lipstick"
+      ],
+      "affirmation": "You are your own light.",
+      "date": "2025-07-16"
+    },
+    {
+      "bag": "The Power Pouch",
+      "products": [
+        "Dewy Primer",
+        "Volume Mascara",
+        "Fire Red Lipstick"
+      ],
+      "affirmation": "You are a radiant being, exuding power and grace in all that you do. Your beauty is a testament to the strength that lies within you.",
+      "date": "2025-07-16"
+    },
+    {
+      "bag": "The Power Pouch",
+      "products": [
+        "Dewy Primer",
+        "Volume Mascara",
+        "Clear Gloss"
+      ],
+      "affirmation": "I am strong, focused, and beautifully fierce.",
+      "date": "2025-07-17"
+    }
+  ]
+}

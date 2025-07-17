@@ -1,0 +1,54 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# Environment variables
+.env
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# macOS & Linux
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# VSCode settings
+.vscode/
+
+# Logs and debug files
+*.log
+
+# PyInstaller
+*.spec
+dist/
+build/
+
+# Python cache
+*.pyo
+*.pyd
+*.pyc
+
+# Streamlit
+.streamlit/
+
+# MySQL or SQLite database files
+*.sqlite3
+*.db
+
+# Project data or secrets
+users_db.json
+*.zip
+
+# Node.js (in case you add frontend tools)
+node_modules/
+
+# HTML temp files
+*.html

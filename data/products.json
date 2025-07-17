@@ -1,0 +1,35 @@
+{
+    "bags": [
+      {
+        "name": "The Bold Bag",
+        "description": "Power move. This one's for women who walk into rooms like they own them."
+      },
+      {
+        "name": "The Glow Ritual",
+        "description": "Healing. Glowing. You're claiming softness without apology."
+      },
+      {
+        "name": "The Soft Reset",
+        "description": "Peace, clarity, space. Stillness is power too."
+      },
+      {
+        "name": "The Power Pouch",
+        "description": "Focused. Fierce. Energy is loud even when you're quiet."
+      }
+    ],
+    "products": {
+      "skin_prep": [
+        { "name": "Matte Foundation", "description": "Full coverage, long-lasting" },
+        { "name": "Dewy Primer", "description": "Hydrating, glow-giving" }
+      ],
+      "eyes": [
+        { "name": "Bold Eyeliner", "description": "Waterproof, precise application" },
+        { "name": "Volume Mascara", "description": "Dramatic lashes" }
+      ],
+      "lips": [
+        { "name": "Fire Red Lipstick", "description": "Bold, matte finish" },
+        { "name": "Clear Gloss", "description": "Subtle shine" }
+      ]
+    }
+  }
+  
