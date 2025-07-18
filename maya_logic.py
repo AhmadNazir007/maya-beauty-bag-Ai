@@ -30,7 +30,7 @@ def create_checkout_summary(bag, selected_products, affirmation):
 
 def save_order_to_backend(username, bag, products, affirmation, summary):
     try:
-        res = requests.post("http://localhost:8000/save_order", json={
+        res = requests.post("https://maya-beauty-bag-ai.onrender.com/save_order", json={
             "user_id": username,
             "bag": bag,
             "products": products,
@@ -46,7 +46,7 @@ def save_order_to_backend(username, bag, products, affirmation, summary):
 
 def fetch_order_history(username):
     try:
-        res = requests.get(f"http://localhost:8000/order_history/{username}")
+        res = requests.get(f"https://maya-beauty-bag-ai.onrender.com/order_history/{username}")
         if res.status_code == 200:
             return res.json().get("orders", [])
     except:
@@ -117,7 +117,7 @@ if st.session_state.username is None:
         login_pass = st.text_input("Password", type="password", key="login_pass")
         if st.button("Login"):
             try:
-                res = requests.post("http://localhost:8000/login", json={
+                res = requests.post("https://maya-beauty-bag-ai.onrender.com/login", json={
                     "username": login_user,
                     "password": login_pass
                 })
@@ -142,7 +142,7 @@ if st.session_state.username is None:
         reg_pass = st.text_input("New Password", type="password", key="reg_pass")
         if st.button("Register"):
             try:
-                res = requests.post("http://localhost:8000/register", json={
+                res = requests.post("https://maya-beauty-bag-ai.onrender.com/register", json={
                     "username": reg_user,
                     "password": reg_pass
                 })
