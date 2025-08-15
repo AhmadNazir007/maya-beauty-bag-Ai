@@ -1,0 +1,43 @@
+{
+  "imran": [
+    {
+      "bag": "The Bold Bag",
+      "products": [
+        "Primer",
+        "Mascara",
+        "Gloss"
+      ],
+      "affirmation": "You weren't made to shrink.",
+      "summary": "You selected The Bold Bag with Primer, Mascara, Gloss. Your affirmation: You weren't made to shrink..",
+      "timestamp": "30f4f6ba-51bf-4cb2-8dcc-63bf81ba8438",
+      "order_id": "4b2864cf"
+    }
+  ],
+  "anonymous": [
+    {
+      "bag": "Soft Reset",
+      "products": [
+        "Moisturizer",
+        "Mascara",
+        "Eyeliner",
+        "Lipstick"
+      ],
+      "affirmation": "You're allowed to take up space in stillness.",
+      "summary": "You selected Soft Reset with Moisturizer, Mascara, Eyeliner, Lipstick. Your affirmation: You're allowed to take up space in stillness..",
+      "timestamp": "5502be17-b6a8-45b1-8a1c-d3916a806b4c",
+      "order_id": "72ac8143"
+    },
+    {
+      "bag": "Radiant",
+      "products": [
+        "Primer",
+        "Eyeliner",
+        "Lipstick"
+      ],
+      "affirmation": "You are your own light.",
+      "summary": "You selected Radiant with Primer, Eyeliner, Lipstick. Your affirmation: You are your own light..",
+      "timestamp": "7414f865-46a4-4918-9e77-8a6e98b0ff62",
+      "order_id": "45e474ca"
+    }
+  ]
+}

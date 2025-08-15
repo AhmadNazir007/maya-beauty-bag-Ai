@@ -1,45 +1,36 @@
 {
   "user_id": "imran",
   "orders": [
-    {
-      "bag": "The Power Pouch",
-      "products": [
-        "Dewy Primer",
-        "Volume Mascara",
-        "Clear Gloss"
-      ],
-      "affirmation": "You weren't made to shrink",
-      "date": "2025-07-14"
-    },
-    {
-      "bag": "The Bold Bag",
-      "products": [
-        "Dewy Primer",
-        "Bold Eyeliner",
-        "Clear Gloss"
-      ],
-      "affirmation": "You're allowed to take up space in stillness.",
-      "date": "2025-07-15"
-    },
-    {
-      "bag": "The Power Pouch",
-      "products": [
-        "Matte Foundation",
-        "Volume Mascara",
-        "Clear Gloss"
-      ],
-      "affirmation": "You're allowed to take up space in stillness.",
-      "date": "2025-07-16"
-    },
-    {
-      "bag": "The Glow Ritual",
-      "products": [
-        "Matte Foundation",
-        "Bold Eyeliner",
-        "Clear Gloss"
-      ],
-      "affirmation": "I am radiant in my own unique beauty.",
-      "date": "2025-07-17"
-    }
-  ]
+		{
+			"bag": "The Power Pouch",
+			"products": ["Dewy Primer", "Volume Mascara", "Clear Gloss"],
+			"affirmation": "You weren't made to shrink",
+			"date": "2025-07-14"
+		},
+		{
+			"bag": "The Bold Bag",
+			"products": ["Dewy Primer", "Bold Eyeliner", "Clear Gloss"],
+			"affirmation": "You're allowed to take up space in stillness.",
+			"date": "2025-07-15"
+		},
+		{
+			"bag": "The Power Pouch",
+			"products": ["Matte Foundation", "Volume Mascara", "Clear Gloss"],
+			"affirmation": "You're allowed to take up space in stillness.",
+			"date": "2025-07-16"
+		},
+		{
+			"bag": "The Glow Ritual",
+			"products": ["Matte Foundation", "Bold Eyeliner", "Clear Gloss"],
+			"affirmation": "I am radiant in my own unique beauty.",
+			"date": "2025-07-17"
+		},
+		{
+			"bag": "Bold",
+			"products": ["Foundation", "Mascara", "Gloss"],
+			"affirmation": "You are your own light.",
+			"summary": "You selected Bold with Foundation, Mascara, Gloss. Your affirmation: You are your own light..",
+			"date": "2025-08-06"
+		}
+	]
 }

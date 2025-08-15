@@ -5,3 +5,14 @@ pydantic
 openai
 python-dotenv
 gunicorn
+twilio
+streamlit-webrtc
+python-multipart
+sounddevice
+numpy
+requests
+openai-whisper
+pydantic
+gTTS
+pyttsx3
+pywin32
