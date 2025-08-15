@@ -15,4 +15,3 @@ openai-whisper
 pydantic
 gTTS
 pyttsx3
-pywin32
