@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from gtts import gTTS
-import whisper
+
 from openai import OpenAI
 from dotenv import load_dotenv
 import logging
@@ -59,11 +59,6 @@ os.makedirs("static", exist_ok=True)
 # Mount static folders
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/audio", StaticFiles(directory="audio_responses"), name="audio")
-
-# Load Whisper model
-print("Loading Whisper model...")
-whisper_model = whisper.load_model("tiny")
-print("Whisper model loaded successfully!")
 
 # Load product data for Maya's tools
 try:
@@ -1792,7 +1787,6 @@ def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "whisper_model": "loaded",
         "audio_directory": "ready",
         "database": "ready",
         "maya_system": "ready",
@@ -1854,7 +1848,7 @@ async def test_tts_endpoint(text: str = "Hello, this is a test message"):
 async def startup_event():
     """Validate system on startup"""
     print("🚀 Starting Maya WebSocket server...")
-    
+
     # Test TTS
     try:
         test_chunks = []
@@ -1864,17 +1858,28 @@ async def startup_event():
         print(f"✅ TTS system working - generated {len(test_chunks)} chunks")
     except Exception as e:
         print(f"❌ TTS system error: {e}")
-    
-    # Test Whisper
+
+    # Test Deepgram API connectivity
     try:
-        # Create a small test audio file
-        test_audio = np.random.rand(16000).astype(np.float32) * 0.1  # 1 second of quiet noise
-        test_result = whisper_model.transcribe(test_audio)
-        print("✅ Whisper model working")
+        import httpx
+
+        headers = {
+            "Authorization": f"Token {DEEPGRAM_API_KEY}"
+        }
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get("https://api.deepgram.com/v1/projects", headers=headers)
+
+        if resp.status_code == 200:
+            print("✅ Deepgram API key valid and reachable")
+        else:
+            print(f"❌ Deepgram API check failed: {resp.status_code} - {resp.text}")
+
     except Exception as e:
-        print(f"❌ Whisper model error: {e}")
-    
+        print(f"❌ Deepgram STT system error: {e}")
+
     print("🎉 Maya WebSocket server started successfully!")
+
 
 if __name__ == "__main__":
     import uvicorn
