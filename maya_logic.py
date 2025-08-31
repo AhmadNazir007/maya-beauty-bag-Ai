@@ -628,7 +628,7 @@ elif st.session_state.mode_select == "Voice":
         st.info("🎯 **Maya's Voice Mode Features:**\n- Full tool access for bag selection and product recommendations\n- Conversation memory across sessions\n- Order placement and history\n- Personalized affirmations")
         
         # Display voice interface
-        st.components.v1.html(open('voice_interface.html', encoding='utf-8').read(), height=300)
+        st.components.v1.html(open('voice_interface.html', encoding='utf-8').read(), height=700)
 
         # Alternative text input for voice mode
         st.divider()

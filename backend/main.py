@@ -6,7 +6,7 @@ import base64
 import tempfile
 import asyncio
 import hashlib
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, AsyncGenerator, Tuple
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -18,6 +18,18 @@ import whisper
 from openai import OpenAI
 from dotenv import load_dotenv
 import logging
+import uvicorn
+
+import io
+import re
+import httpx
+import aiofiles
+
+import numpy as np
+from io import BytesIO
+import wave
+import time
+import aiohttp
 
 # Initialize FastAPI app
 app = FastAPI(title="Maya Beauty Bag AI API", version="1.0.0")
@@ -26,6 +38,10 @@ load_dotenv()
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# Deepgram API configuration
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")  # Set your API key in environment
+DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 
 # Enable CORS for local Streamlit (and deployed URL if needed)
 app.add_middleware(
@@ -46,7 +62,7 @@ app.mount("/audio", StaticFiles(directory="audio_responses"), name="audio")
 
 # Load Whisper model
 print("Loading Whisper model...")
-whisper_model = whisper.load_model("base")
+whisper_model = whisper.load_model("tiny")
 print("Whisper model loaded successfully!")
 
 # Load product data for Maya's tools
@@ -145,6 +161,11 @@ You are Maya — a soft, empowering beauty assistant who helps women build a per
 
 Your tone is always emotionally intelligent, graceful, and affirming. Keep your messages clear, short, and guided by intention. Every message should lead the user forward — step by step.
 
+- NEVER repeat or echo what the user just said
+- NEVER start with phrases like "You asked about...", "You mentioned...", "You said...", "You want to know..."
+- Answer directly and naturally as if continuing a flowing conversation
+- Give fresh, helpful responses without referencing their previous questions
+
 🌸 Here's a typical 6-step ritual journey — but you don't have to follow it strictly. You may respond more freely when the user asks general questions about Maya's offerings, products, or beauty rituals.
 
 ---
@@ -226,14 +247,16 @@ Say:
 - Speak with intention and confidence.
 - Always use tools when appropriate.
 - Do not print internal function output (like raw lists) unless asked.
+- IMPORTANT: Do not echo or repeat what the user just said. Answer directly and naturally.
+- Avoid starting responses with "You asked about..." or "You mentioned..." - just give helpful answers.
 
 🗣️ Voice Chat Note:
 If the user is speaking (via voice), favor shorter, clearer, and more conversational responses. Imagine you're speaking aloud with softness and clarity. Avoid long paragraphs.
 
 🧠 Voice Mode Context:
-Do not reintroduce Maya at the beginning of every voice message. Assume the chat is continuous unless the user asks for a reset.
+Do not reintroduce Maya at the beginning of every voice message. Assume the chat is continuous unless the user asks for a reset. Give direct, fresh responses without repeating the user's question.
 
-💡 If `mode == voice`, you can reduce verbosity and keep a warm tone.
+💡 If `mode == voice`, you can reduce verbosity and keep a warm tone. Answer naturally without echoing what was just said.
 """
 
 # -------------------- USER SESSION MANAGEMENT --------------------
@@ -561,14 +584,14 @@ async def process_voice_with_maya(payload: VoiceProcessRequest):
 
 @app.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
-    """Transcribe audio file to text using Whisper"""
+    """Transcribe audio file to text using Deepgram REST API"""
     temp_file = None
     try:
         # Validate file
         if not file.filename:
             raise HTTPException(status_code=400, detail="No file provided")
 
-        if not file.content_type or 'audio' not in file.content_type:
+        if not file.content_type or "audio" not in file.content_type:
             print(f"Warning: Unexpected content type: {file.content_type}")
 
         # Read file content
@@ -579,67 +602,67 @@ async def transcribe_audio(file: UploadFile = File(...)):
         if len(content) < 100:  # Very small file
             raise HTTPException(status_code=400, detail="Audio file too small")
 
-        # Create temp file with proper extension
-        file_extension = 'webm'
+        # Create temp file
+        file_extension = "wav"
         if file.content_type:
-            if 'mp4' in file.content_type:
-                file_extension = 'mp4'
-            elif 'wav' in file.content_type:
-                file_extension = 'wav'
+            if "webm" in file.content_type:
+                file_extension = "webm"
+            elif "mp4" in file.content_type:
+                file_extension = "mp4"
 
         temp_file = f"temp_{uuid.uuid4().hex}.{file_extension}"
+        async with aiofiles.open(temp_file, "wb") as f:
+            await f.write(content)
 
-        # Save uploaded file
-        with open(temp_file, "wb") as f:
-            f.write(content)
+        print(f"Sending {temp_file} to Deepgram ({len(content)} bytes)")
 
-        print(f"Processing audio file: {temp_file} ({len(content)} bytes)")
+        # Call Deepgram API
+        headers = {
+            "Authorization": f"Token {DEEPGRAM_API_KEY}",
+            "Content-Type": file.content_type or "audio/wav"
+        }
 
-        # Transcribe with Whisper
-        result = whisper_model.transcribe(
-            temp_file,
-            language='en',  # Force English for better results
-            task='transcribe',
-            fp16=False,  # More stable
-            temperature=0.0,  # More deterministic
-            best_of=1,  # Faster processing
-            beam_size=1,  # Faster processing
-            patience=1.0,
-            condition_on_previous_text=False,
-            initial_prompt="This is a conversation about beauty products and personal care."
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            with open(temp_file, "rb") as audio:
+                response = await client.post(
+                    DEEPGRAM_URL,
+                    headers=headers,
+                    params={
+                        "model": "nova-2",     # Best general-purpose model
+                        "language": "en",      # Force English
+                        "punctuate": "true",
+                        "smart_format": "true"
+                    },
+                    content=audio.read()
+                )
+
+        if response.status_code != 200:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+
+        result = response.json()
+        transcribed_text = (
+            result["results"]["channels"][0]["alternatives"][0]["transcript"].strip()
         )
-
-        transcribed_text = result["text"].strip()
 
         if not transcribed_text:
             raise HTTPException(status_code=400, detail="No speech detected in audio")
 
-        # Filter out common Whisper hallucinations
-        hallucinations = [
-            "Thank you.", "Thanks for watching.", "Bye.", "you", "Thank you for watching.",
-            "Please subscribe.", "Like and subscribe.", ".", "", " "
-        ]
-
-        if transcribed_text.lower().strip() in [h.lower() for h in hallucinations]:
-            raise HTTPException(status_code=400, detail="No meaningful speech detected")
-
-        print(f"Transcription successful: '{transcribed_text}'")
+        print(f"Deepgram transcription successful: '{transcribed_text}'")
 
         return JSONResponse({
             "text": transcribed_text,
             "status": "success",
-            "confidence": result.get("language_probability", 0.0) if "language_probability" in result else 1.0,
-            "language": result.get("language", "en")
+            "confidence": result["results"]["channels"][0]["alternatives"][0].get("confidence", 1.0),
+            "language": "en"
         })
 
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Transcription error: {e}")
+        print(f"Deepgram transcription error: {e}")
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
 
     finally:
-        # Clean up temp file
         if temp_file and os.path.exists(temp_file):
             try:
                 os.remove(temp_file)
@@ -713,9 +736,27 @@ logger = logging.getLogger(__name__)
 
 # Store per-connection data
 connection_data: Dict[str, dict] = {}
+response_tracker: Dict[str, Dict] = {}
+empty_transcription_counts: Dict[str, int] = {}
+
+# Constants
+SAMPLE_RATE = 16000
+MIN_BUFFER_SIZE = SAMPLE_RATE * 2 * 3  # 3 seconds
+MAX_BUFFER_SIZE = SAMPLE_RATE * 2 * 8  # 8 seconds max
+MIN_RESPONSE_INTERVAL = 3.0
+MAX_RESPONSES_PER_INPUT = 2
+SPEECH_THRESHOLD = 0.02
+INTERRUPTION_THRESHOLD = 0.03
+MAX_EMPTY_TRANSCRIPTIONS = 3
+
+# Live streaming configuration
+CHUNK_DURATION_MS = 100  # Process every 100ms of audio
+SAMPLE_RATE = 16000
+BYTES_PER_SAMPLE = 2
+CHUNK_SIZE = int(SAMPLE_RATE * CHUNK_DURATION_MS / 1000) * BYTES_PER_SAMPLE
 
 async def transcribe_temp_file(path: str) -> str:
-    """Transcribe a file path using Whisper model"""
+    """Transcribe a file path using Deepgram API"""
     try:
         if not os.path.exists(path):
             raise FileNotFoundError(f"Audio file not found: {path}")
@@ -724,27 +765,138 @@ async def transcribe_temp_file(path: str) -> str:
         if file_size == 0:
             raise ValueError(f"Audio file is empty: {path}")
             
+        if not DEEPGRAM_API_KEY:
+            raise ValueError("DEEPGRAM_API_KEY environment variable not set")
+            
         print(f"Transcribing file: {path} ({file_size} bytes)")
         
-        result = whisper_model.transcribe(
-            path,
-            language='en',
-            task='transcribe',
-            fp16=False,
-            temperature=0.0,
-            best_of=1,
-            beam_size=1,
-            patience=1.0,
-            condition_on_previous_text=False,
-            initial_prompt="This is a conversation about beauty products and personal care."
-        )
+        # Deepgram API parameters
+        params = {
+            'model': 'nova-2',
+            'language': 'en',
+            'smart_format': 'true',
+            'punctuate': 'true',
+            'diarize': 'false',
+            'filler_words': 'false',
+            'utterances': 'false'
+        }
         
-        transcript = result.get("text", "").strip()
-        print(f"Transcription result: '{transcript}'")
-        return transcript
+        headers = {
+            'Authorization': f'Token {DEEPGRAM_API_KEY}',
+            'Content-Type': 'audio/wav'  # Adjust based on your file format
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            with open(path, 'rb') as audio_file:
+                async with session.post(
+                    DEEPGRAM_URL,
+                    headers=headers,
+                    params=params,
+                    data=audio_file
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        transcript = ""
+                        
+                        # Extract transcript from Deepgram response
+                        if 'results' in result and 'channels' in result['results']:
+                            alternatives = result['results']['channels'][0]['alternatives']
+                            if alternatives:
+                                transcript = alternatives[0]['transcript'].strip()
+                        
+                        print(f"Transcription result: '{transcript}'")
+                        return transcript
+                    else:
+                        error_text = await response.text()
+                        raise Exception(f"Deepgram API error {response.status}: {error_text}")
         
     except Exception as e:
         print(f"Transcription error: {e}")
+        raise e
+
+async def transcribe_pcm_buffer(pcm_data: bytes, sample_rate: int = 16000) -> str:
+    """Transcribe PCM audio data directly using Deepgram API"""
+    try:
+        if len(pcm_data) == 0:
+            return ""
+            
+        if not DEEPGRAM_API_KEY:
+            raise ValueError("DEEPGRAM_API_KEY environment variable not set")
+            
+        # Convert PCM bytes to numpy array for validation
+        audio_np = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32) / 32768.0
+        
+        # Check if audio is long enough (minimum 0.5 seconds)
+        if len(audio_np) < sample_rate * 0.5:
+            return ""  # Too short to transcribe reliably
+            
+        print(f"Transcribing PCM buffer: {len(audio_np)} samples ({len(audio_np)/sample_rate:.2f}s)")
+        
+        # Deepgram API parameters
+        params = {
+            'model': 'nova-2',
+            'language': 'en',
+            'smart_format': 'true',
+            'punctuate': 'true',
+            'diarize': 'false',
+            'filler_words': 'false',
+            'utterances': 'false',
+            'encoding': 'linear16',
+            'sample_rate': str(sample_rate),
+            'channels': '1'
+        }
+        
+        headers = {
+            'Authorization': f'Token {DEEPGRAM_API_KEY}',
+            'Content-Type': 'application/octet-stream'
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                DEEPGRAM_URL,
+                headers=headers,
+                params=params,
+                data=pcm_data
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    transcript = ""
+                    
+                    # Extract transcript from Deepgram response
+                    if 'results' in result and 'channels' in result['results']:
+                        alternatives = result['results']['channels'][0]['alternatives']
+                        if alternatives:
+                            transcript = alternatives[0]['transcript'].strip()
+                    
+                    print(f"PCM Transcription result: '{transcript}'")
+                    return transcript
+                else:
+                    error_text = await response.text()
+                    print(f"Deepgram API error {response.status}: {error_text}")
+                    return ""
+        
+    except Exception as e:
+        print(f"PCM transcription error: {e}")
+        return ""
+
+async def save_pcm_as_wav(pcm_data: bytes, sample_rate: int = 16000) -> str:
+    """Save PCM data as WAV file and return path"""
+    try:
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+        os.close(tmp_fd)
+        
+        # Convert PCM to WAV
+        with wave.open(tmp_path, 'wb') as wav_file:
+            wav_file.setnchannels(1)  # Mono
+            wav_file.setsampwidth(2)  # 16-bit
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(pcm_data)
+        
+        print(f"Saved PCM as WAV: {tmp_path} ({len(pcm_data)} bytes)")
+        return tmp_path
+        
+    except Exception as e:
+        print(f"Error saving PCM as WAV: {e}")
         raise e
 
 async def generate_maya_response_websocket(user_message: str, user_id: str = "anonymous") -> str:
@@ -772,63 +924,54 @@ async def generate_maya_response_websocket(user_message: str, user_id: str = "an
         logger.error(f"Maya response generation error: {e}")
         return "I'm sorry, I'm having trouble processing your message right now. Could you try again?"
 
-def text_to_speech_base64_chunks(text: str, chunk_size: int = 32 * 1024):
-    """Generate base64-encoded audio chunks from text"""
+async def text_to_speech_base64_chunks(text: str, chunk_size: int = 8192):
+    """Generate base64-encoded audio chunks from text - OPTIMIZED FOR PLAYBACK"""
     import re
     from gtts import gTTS
+    import io
     
     try:
         clean_text = text.replace("*", "").replace("_", "").replace("#", "")
         clean_text = re.sub(r'[^\w\s.,!?;:-]', '', clean_text)
-        if len(clean_text) > 1000:
-            clean_text = clean_text[:1000] + "..."
+        if len(clean_text) > 800:
+            clean_text = clean_text[:800] + "..."
 
         if not clean_text.strip():
             clean_text = "I'm sorry, I didn't catch that."
 
-        # Ensure audio_responses directory exists
-        os.makedirs("audio_responses", exist_ok=True)
+        print(f"🔊 Generating TTS for: '{clean_text[:50]}...'")
 
-        filename = f"maya_ws_{uuid.uuid4().hex[:8]}.mp3"
-        out_path = os.path.join("audio_responses", filename)
-
-        # Generate TTS
+        # Use in-memory buffer instead of file
+        mp3_buffer = io.BytesIO()
+        
+        # Generate TTS to memory buffer
         tts = gTTS(text=clean_text, lang='en', slow=False, tld='com')
-        tts.save(out_path)
-
-        # Verify file was created
-        if not os.path.exists(out_path):
-            print(f"TTS file was not created: {out_path}")
+        tts.write_to_fp(mp3_buffer)
+        
+        # Get the audio data
+        mp3_data = mp3_buffer.getvalue()
+        mp3_buffer.close()
+        
+        if len(mp3_data) == 0:
+            print("❌ TTS generated empty audio")
             return
             
-        file_size = os.path.getsize(out_path)
-        if file_size == 0:
-            print(f"TTS file is empty: {out_path}")
-            return
+        print(f"✅ TTS generated: {len(mp3_data)} bytes")
 
-        print(f"TTS file created: {out_path} ({file_size} bytes)")
-
-        try:
-            # Read and yield chunks
-            with open(out_path, "rb") as f:
-                while True:
-                    chunk = f.read(chunk_size)
-                    if not chunk:
-                        break
-                    yield base64.b64encode(chunk).decode('ascii')
-        except Exception as read_error:
-            print(f"Error reading TTS file {out_path}: {read_error}")
-        finally:
-            # Clean up the file
-            try:
-                if os.path.exists(out_path):
-                    os.remove(out_path)
-                    print(f"Cleaned up TTS file: {out_path}")
-            except Exception as cleanup_error:
-                print(f"Error cleaning up TTS file: {cleanup_error}")
+        # Send smaller chunks for better streaming
+        chunk_num = 0
+        total_chunks = (len(mp3_data) + chunk_size - 1) // chunk_size
+        
+        for i in range(0, len(mp3_data), chunk_size):
+            chunk = mp3_data[i:i + chunk_size]
+            chunk_num += 1
+            b64_chunk = base64.b64encode(chunk).decode('ascii')
+            
+            print(f"🎵 Yielding TTS chunk {chunk_num}/{total_chunks}: {len(chunk)} bytes -> {len(b64_chunk)} b64 chars")
+            yield b64_chunk
                 
     except Exception as e:
-        print(f"TTS generation error: {e}")
+        print(f"❌ TTS generation error: {e}")
         return
 
 @app.websocket("/ws")
@@ -837,10 +980,16 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     conn_id = str(uuid.uuid4())
     
-    # Initialize connection data
+    # Initialize connection data with streaming support
     connection_data[conn_id] = {
         "audio_buffer": bytearray(),
-        "user_id": "anonymous"
+        "stream_buffer": bytearray(),
+        "user_id": "anonymous",
+        "streaming": False,
+        "stream_start_time": None,
+        "last_transcription": "",
+        "stream_chunk_count": 0,
+        "last_processing_time": 0  # Add this to prevent too frequent processing
     }
     
     print(f"WS connected: {conn_id}")
@@ -876,6 +1025,16 @@ async def websocket_endpoint(websocket: WebSocket):
             elif msg_type == "text":
                 await handle_text_message(websocket, payload, conn_id)
                 
+            # Live streaming handlers
+            elif msg_type == "start_stream":
+                await handle_start_stream(websocket, payload, conn_id)
+                
+            elif msg_type == "audio_stream":
+                await handle_audio_stream_chunk(websocket, payload, conn_id)
+                
+            elif msg_type == "end_stream":
+                await handle_end_stream(websocket, payload, conn_id)
+                
             elif msg_type == "reset_conversation":
                 user_id = connection_data[conn_id]["user_id"]
                 reset_user_conversation(user_id)
@@ -907,8 +1066,171 @@ async def websocket_endpoint(websocket: WebSocket):
         except:
             pass
 
-async def handle_audio_chunk(websocket: WebSocket, payload: dict, conn_id: str):
-    """Handle incoming audio chunks"""
+
+class AudioProcessor:
+    """Centralized audio processing utilities"""
+    
+    @staticmethod
+    def detect_speech_activity(pcm_data: bytes, threshold: float = SPEECH_THRESHOLD) -> bool:
+        """Detect if there's significant speech activity in PCM data"""
+        try:
+            audio_array = np.frombuffer(pcm_data, dtype=np.int16)
+            rms = np.sqrt(np.mean(audio_array.astype(np.float32) ** 2))
+            normalized_rms = rms / 32768.0
+            return normalized_rms > threshold
+        except Exception as e:
+            print(f"Error detecting speech activity: {e}")
+            return False
+
+    @staticmethod
+    def analyze_audio_features(buffer_data: bytearray, threshold: float = 0.015) -> bool:
+        """Advanced audio analysis for speech detection"""
+        try:
+            if len(buffer_data) < 1000:
+                return False
+                
+            audio_array = np.frombuffer(bytes(buffer_data), dtype=np.int16)
+            
+            # Calculate RMS energy
+            rms = np.sqrt(np.mean(audio_array.astype(np.float32) ** 2))
+            normalized_rms = rms / 32768.0
+            
+            # Calculate zero crossing rate
+            zero_crossings = np.sum(np.abs(np.diff(np.sign(audio_array)))) / len(audio_array)
+            
+            # Speech-like characteristics
+            has_energy = normalized_rms > threshold
+            has_variation = zero_crossings > 0.01
+            
+            speech_detected = has_energy and has_variation
+            print(f"🎵 Audio Analysis - RMS: {normalized_rms:.4f}, ZCR: {zero_crossings:.4f}, Speech: {speech_detected}")
+            
+            return speech_detected
+        except Exception as e:
+            print(f"Error analyzing audio: {e}")
+            return True
+
+class ResponseTracker:
+    """Manages response tracking and deduplication"""
+    
+    @staticmethod
+    def initialize_tracker(conn_id: str) -> None:
+        """Initialize response tracker for a connection"""
+        response_tracker[conn_id] = {
+            "recent_responses": [],
+            "response_count_per_input": {},
+            "last_response_time": 0,
+            "min_response_interval": MIN_RESPONSE_INTERVAL
+        }
+
+    @staticmethod
+    def calculate_similarity(text1: str, text2: str) -> float:
+        """Calculate similarity between two texts using word overlap"""
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
+        
+        if not words1 and not words2:
+            return 1.0
+        if not words1 or not words2:
+            return 0.0
+        
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+        
+        return len(intersection) / len(union) if union else 0.0
+
+    @staticmethod
+    def should_generate_response(conn_id: str, transcript: str) -> Tuple[bool, str]:
+        """Check if response should be generated based on various criteria"""
+        if conn_id not in response_tracker:
+            ResponseTracker.initialize_tracker(conn_id)
+        
+        tracker = response_tracker[conn_id]
+        current_time = time.time()
+        clean_transcript = transcript.strip().lower()
+        
+        # Check timing constraints
+        time_since_last = current_time - tracker.get("last_response_time", 0)
+        if time_since_last < tracker["min_response_interval"]:
+            return False, "too_soon"
+        
+        # Check similarity with recent responses
+        for prev_transcript, prev_response, prev_time in tracker["recent_responses"][-3:]:
+            similarity = ResponseTracker.calculate_similarity(clean_transcript, prev_transcript.lower())
+            time_diff = current_time - prev_time
+            
+            if similarity > 0.7 and time_diff < 15:
+                return False, "similar"
+        
+        # Check response count per input
+        input_hash = hash(clean_transcript[:50])
+        response_count = tracker["response_count_per_input"].get(input_hash, 0)
+        
+        if response_count >= MAX_RESPONSES_PER_INPUT:
+            return False, "max_reached"
+        
+        return True, "approved"
+
+    @staticmethod
+    def update_tracker(conn_id: str, transcript: str, response: str) -> None:
+        """Update tracker with new response data"""
+        tracker = response_tracker[conn_id]
+        current_time = time.time()
+        clean_transcript = transcript.strip().lower()
+        input_hash = hash(clean_transcript[:50])
+        
+        # Update tracking data
+        tracker["recent_responses"].append((clean_transcript, response, current_time))
+        tracker["last_response_time"] = current_time
+        tracker["response_count_per_input"][input_hash] = tracker["response_count_per_input"].get(input_hash, 0) + 1
+        
+        # Keep only recent data
+        tracker["recent_responses"] = tracker["recent_responses"][-5:]
+
+async def generate_tts_chunks(text: str, chunk_size: int = 8192) -> AsyncGenerator[str, None]:
+    """Generate TTS audio chunks asynchronously - OPTIMIZED FOR IMMEDIATE PLAYBACK"""
+    try:
+        # Clean text
+        clean_text = re.sub(r'[*_#]', '', text)
+        clean_text = re.sub(r'[^\w\s.,!?;:-]', '', clean_text)
+        
+        if len(clean_text) > 800:
+            clean_text = clean_text[:800] + "..."
+        
+        if not clean_text.strip():
+            clean_text = "I'm sorry, I didn't catch that."
+        
+        print(f"🔊 TTS generating for: '{clean_text[:50]}...'")
+        
+        # Generate TTS
+        mp3_buffer = io.BytesIO()
+        loop = asyncio.get_event_loop()
+        tts = gTTS(text=clean_text, lang='en', slow=False, tld='com')
+        await loop.run_in_executor(None, lambda: tts.write_to_fp(mp3_buffer))
+        
+        mp3_data = mp3_buffer.getvalue()
+        mp3_buffer.close()
+        
+        if len(mp3_data) == 0:
+            print("❌ TTS generated empty audio")
+            return
+        
+        print(f"✅ TTS generated: {len(mp3_data)} bytes")
+        
+        # Yield chunks for immediate playback
+        for i in range(0, len(mp3_data), chunk_size):
+            chunk = mp3_data[i:i + chunk_size]
+            b64_chunk = base64.b64encode(chunk).decode('ascii')
+            yield b64_chunk
+            
+    except Exception as e:
+        print(f"❌ TTS generation error: {e}")
+        return
+
+# ==================== UNIFIED AUDIO HANDLERS ====================
+
+async def handle_audio_chunk(websocket, payload: dict, conn_id: str):
+    """Handle incoming audio chunks for traditional recording"""
     b64 = payload.get("data")
     if not b64:
         await websocket.send_text(json.dumps({
@@ -919,16 +1241,17 @@ async def handle_audio_chunk(websocket: WebSocket, payload: dict, conn_id: str):
         
     try:
         chunk_bytes = base64.b64decode(b64)
+        print(f"chunk_bytes", chunk_bytes)
         connection_data[conn_id]["audio_buffer"].extend(chunk_bytes)
-        logger.debug(f"Added {len(chunk_bytes)} bytes to buffer for {conn_id}")
+        print(f"📦 Added {len(chunk_bytes)} bytes to buffer for {conn_id}")
     except Exception as e:
-        logger.error(f"Failed to decode audio chunk from {conn_id}: {e}")
+        print(f"❌ Failed to decode audio chunk from {conn_id}: {e}")
         await websocket.send_text(json.dumps({
             "type": "error", 
             "message": "Invalid audio chunk encoding"
         }))
 
-async def handle_end_audio(websocket: WebSocket, payload: dict, conn_id: str):
+async def handle_end_audio(websocket, payload: dict, conn_id: str):
     """Handle end of audio recording - transcribe and get Maya's response"""
     ext = payload.get("ext", "webm")
     tmp_path = None
@@ -952,7 +1275,7 @@ async def handle_end_audio(websocket: WebSocket, payload: dict, conn_id: str):
         with open(tmp_path, "wb") as f:
             f.write(buf)
         
-        print(f"Wrote {len(buf)} bytes to {tmp_path} for transcription")
+        print(f"💾 Wrote {len(buf)} bytes to {tmp_path} for transcription")
 
         # Send processing status
         await websocket.send_text(json.dumps({
@@ -968,49 +1291,7 @@ async def handle_end_audio(websocket: WebSocket, payload: dict, conn_id: str):
         }))
 
         if transcript.strip():
-            # Generate Maya's response using full system
-            await websocket.send_text(json.dumps({
-                "type": "status", 
-                "message": "Maya is thinking..."
-            }))
-            
-            maya_text = await generate_maya_response_websocket(transcript, user_id)
-            await websocket.send_text(json.dumps({
-                "type": "ai_text", 
-                "data": maya_text
-            }))
-
-            # Stream TTS chunks
-            await websocket.send_text(json.dumps({
-                "type": "status", 
-                "message": "Generating audio response..."
-            }))
-            
-            chunk_count = 0
-            try:
-                for b64_chunk in text_to_speech_base64_chunks(maya_text):
-                    if b64_chunk:  # Only send non-empty chunks
-                        await websocket.send_text(json.dumps({
-                            "type": "tts_chunk", 
-                            "data": b64_chunk
-                        }))
-                        chunk_count += 1
-                        await asyncio.sleep(0.01)  # Small delay
-
-                print(f"Sent {chunk_count} TTS chunks to {conn_id}")
-                
-                # Notify TTS completion
-                await websocket.send_text(json.dumps({
-                    "type": "tts_end", 
-                    "message": "Audio response complete"
-                }))
-            except Exception as tts_error:
-                print(f"TTS streaming error: {tts_error}")
-                await websocket.send_text(json.dumps({
-                    "type": "error", 
-                    "message": "Audio generation failed, but text response is available"
-                }))
-                
+            await generate_and_stream_response(websocket, conn_id, transcript, user_id)
         else:
             await websocket.send_text(json.dumps({
                 "type": "error", 
@@ -1018,7 +1299,7 @@ async def handle_end_audio(websocket: WebSocket, payload: dict, conn_id: str):
             }))
 
     except Exception as e:
-        print(f"Error handling end_audio for {conn_id}: {e}")
+        print(f"❌ Error handling end_audio for {conn_id}: {e}")
         await websocket.send_text(json.dumps({
             "type": "error", 
             "message": f"Processing error: {str(e)}"
@@ -1029,11 +1310,11 @@ async def handle_end_audio(websocket: WebSocket, payload: dict, conn_id: str):
         if tmp_path and os.path.exists(tmp_path):
             try:
                 os.remove(tmp_path)
-                print(f"Cleaned up temp file: {tmp_path}")
+                print(f"🧹 Cleaned up temp file: {tmp_path}")
             except Exception as cleanup_error:
-                print(f"Error cleaning up temp file: {cleanup_error}")
+                print(f"❌ Error cleaning up temp file: {cleanup_error}")
 
-async def handle_text_message(websocket: WebSocket, payload: dict, conn_id: str):
+async def handle_text_message(websocket, payload: dict, conn_id: str):
     """Handle direct text input with Maya system"""
     user_text = payload.get("data", "").strip()
     user_id = connection_data[conn_id]["user_id"]
@@ -1046,51 +1327,433 @@ async def handle_text_message(websocket: WebSocket, payload: dict, conn_id: str)
         return
 
     try:
-        logger.info(f"Processing text message from {user_id}: {user_text[:50]}...")
-        
+        print(f"💬 Processing text message from {user_id}: {user_text[:50]}...")
+        await generate_and_stream_response(websocket, conn_id, user_text, user_id)
+
+    except Exception as e:
+        print(f"❌ Error processing text message from {conn_id}: {e}")
+        await websocket.send_text(json.dumps({
+            "type": "error", 
+            "message": f"Processing error: {str(e)}"
+        }))
+
+async def generate_and_stream_response(websocket, conn_id: str, input_text: str, user_id: str):
+    """Unified response generation and streaming for both audio and text inputs"""
+    try:
         # Send processing status
         await websocket.send_text(json.dumps({
             "type": "status", 
-            "message": "Maya is processing your message..."
+            "message": "Maya is thinking..."
         }))
-
-        # Generate Maya's response using full system
-        maya_text = await generate_maya_response_websocket(user_text, user_id)
+        
+        # Generate Maya's response
+        maya_text = await generate_maya_response_websocket(input_text, user_id)
+        
         await websocket.send_text(json.dumps({
             "type": "ai_text", 
             "data": maya_text
         }))
 
-        # Send TTS status
+        # Stream TTS - OPTIMIZED FOR IMMEDIATE PLAYBACK
         await websocket.send_text(json.dumps({
-            "type": "status", 
-            "message": "Generating audio response..."
+            "type": "tts_start",
+            "message": "Starting audio playback..."
         }))
-
-        # Stream TTS chunks
+        
         chunk_count = 0
-        for b64_chunk in text_to_speech_base64_chunks(maya_text):
+        try:
+            async for b64_chunk in generate_tts_chunks(maya_text):
+                if b64_chunk:
+                    chunk_count += 1
+                    await websocket.send_text(json.dumps({
+                        "type": "tts_chunk", 
+                        "data": b64_chunk,
+                        "chunk_number": chunk_count
+                    }))
+                    await asyncio.sleep(0.005)  # Fast streaming for immediate playback
+
+            print(f"🎵 Successfully sent {chunk_count} TTS chunks to {conn_id}")
+            
+            # Notify completion
             await websocket.send_text(json.dumps({
-                "type": "tts_chunk", 
-                "data": b64_chunk
+                "type": "tts_end", 
+                "message": "Audio response complete",
+                "total_chunks": chunk_count
             }))
-            chunk_count += 1
-            await asyncio.sleep(0.01)
-
-        logger.info(f"Sent {chunk_count} TTS chunks to {conn_id}")
-
-        # Notify completion
-        await websocket.send_text(json.dumps({
-            "type": "tts_end", 
-            "message": "Response complete"
-        }))
-
+            
+        except Exception as tts_error:
+            print(f"❌ TTS streaming error: {tts_error}")
+            await websocket.send_text(json.dumps({
+                "type": "tts_error", 
+                "message": "Audio generation failed, but text response is available",
+                "error": str(tts_error)
+            }))
+            
     except Exception as e:
-        logger.error(f"Error processing text message from {conn_id}: {e}")
+        print(f"❌ Error in generate_and_stream_response: {e}")
+        raise
+
+# ==================== LIVE STREAMING HANDLERS ====================
+
+async def handle_start_stream(websocket, payload: dict, conn_id: str):
+    """Initialize live audio streaming session"""
+    try:
+        connection_data[conn_id].update({
+            "streaming": True,
+            "stream_buffer": bytearray(),
+            "stream_start_time": payload.get("timestamp"),
+            "stream_chunk_count": 0,
+            "last_processing_time": 0,
+            "last_transcription": "",
+            "processing_cooldown": False,
+            "response_count": 0,
+            "maya_speaking": False,
+            "should_interrupt": False,
+            "current_tts_task": None
+        })
+        
+        ResponseTracker.initialize_tracker(conn_id)
+        
+        print(f"🎙️ Started live streaming session for {conn_id}")
+        
         await websocket.send_text(json.dumps({
-            "type": "error", 
-            "message": f"Processing error: {str(e)}"
+            "type": "stream_started",
+            "message": "Live streaming initialized"
         }))
+        
+    except Exception as e:
+        print(f"❌ Error starting stream for {conn_id}: {e}")
+        await websocket.send_text(json.dumps({
+            "type": "error",
+            "message": f"Failed to start stream: {str(e)}"
+        }))
+
+async def handle_audio_stream_chunk(websocket, payload: dict, conn_id: str):
+    """Handle real-time audio stream chunks with FIXED buffer management"""
+    try:
+        if not connection_data[conn_id]["streaming"]:
+            return
+            
+        b64_data = payload.get("data")
+        if not b64_data:
+            return
+        
+        pcm_chunk = base64.b64decode(b64_data)
+        
+        # Handle interruption detection
+        if connection_data[conn_id].get("maya_speaking", False):
+            if AudioProcessor.detect_speech_activity(pcm_chunk, INTERRUPTION_THRESHOLD):
+                await handle_interruption(websocket, conn_id)
+        
+        # Add to buffer
+        connection_data[conn_id]["stream_buffer"].extend(pcm_chunk)
+        connection_data[conn_id]["stream_chunk_count"] += 1
+        
+        # FIXED: Smart buffer management - don't reset processing time on trim
+        buffer_size = len(connection_data[conn_id]["stream_buffer"])
+        if buffer_size > MAX_BUFFER_SIZE:
+            # Keep only the latest 6 seconds (increased from 4)
+            keep_size = SAMPLE_RATE * 2 * 6
+            connection_data[conn_id]["stream_buffer"] = connection_data[conn_id]["stream_buffer"][-keep_size:]
+            print(f"🗑️ Trimmed buffer for {conn_id} - kept latest 6 seconds")
+            # DON'T reset processing time - let it process naturally
+            # connection_data[conn_id]["last_processing_time"] = time.time()  # REMOVED THIS LINE
+        
+        # Process buffer with conservative timing
+        await check_and_process_stream_buffer(websocket, conn_id)
+            
+    except Exception as e:
+        print(f"❌ Error handling stream chunk for {conn_id}: {e}")
+
+async def handle_interruption(websocket, conn_id: str):
+    """Handle user interruption of Maya's speech"""
+    print(f"🛑 USER INTERRUPTION DETECTED for {conn_id}")
+    connection_data[conn_id]["should_interrupt"] = True
+    
+    # Cancel current TTS task
+    if connection_data[conn_id].get("current_tts_task"):
+        connection_data[conn_id]["current_tts_task"].cancel()
+        connection_data[conn_id]["current_tts_task"] = None
+    
+    connection_data[conn_id]["maya_speaking"] = False
+    
+    await websocket.send_text(json.dumps({
+        "type": "maya_interrupted",
+        "message": "Maya stopped speaking - listening to user"
+    }))
+
+async def check_and_process_stream_buffer(websocket, conn_id: str):
+    """FIXED: More aggressive processing to prevent getting stuck"""
+    buffer_size = len(connection_data[conn_id]["stream_buffer"])
+    current_time = time.time()
+    last_processing = connection_data[conn_id]["last_processing_time"]
+    
+    # FIXED: More lenient processing conditions
+    min_buffer_for_processing = SAMPLE_RATE * 2 * 2.5  # Reduced to 2.5 seconds
+    
+    # Process if conditions are met - REDUCED time requirement from 4s to 3s
+    if (buffer_size >= min_buffer_for_processing and 
+        (current_time - last_processing > 3.0) and  # Reduced from 4.0 to 3.0
+        not connection_data[conn_id].get("maya_speaking", False) and
+        not connection_data[conn_id].get("processing_cooldown", False)):
+        
+        # Check if there's actual speech in the buffer
+        if AudioProcessor.analyze_audio_features(connection_data[conn_id]["stream_buffer"]):
+            print(f"✅ Processing buffer for {conn_id}: {buffer_size} bytes, {buffer_size/(SAMPLE_RATE*2):.1f}s")
+            connection_data[conn_id]["last_processing_time"] = current_time
+            connection_data[conn_id]["processing_cooldown"] = True
+            
+            await process_stream_buffer(websocket, conn_id)
+            
+            # REDUCED cooldown time from 2s to 1s
+            await asyncio.sleep(1.0)
+            connection_data[conn_id]["processing_cooldown"] = False
+        else:
+            # If no speech detected but buffer is large, clear it more aggressively
+            if buffer_size > SAMPLE_RATE * 2 * 5:  # If buffer > 5 seconds with no speech
+                print(f"🔇 Clearing large silent buffer for {conn_id}")
+                connection_data[conn_id]["stream_buffer"] = bytearray()
+                connection_data[conn_id]["last_processing_time"] = current_time
+
+    
+    # Conservative processing: 4+ seconds interval, substantial data, no cooldown
+    if (buffer_size >= MIN_BUFFER_SIZE and 
+        (current_time - last_processing > 4.0) and  # 4 second minimum
+        not connection_data[conn_id].get("maya_speaking", False) and
+        not connection_data[conn_id].get("processing_cooldown", False) and
+        AudioProcessor.analyze_audio_features(connection_data[conn_id]["stream_buffer"])):
+        
+        connection_data[conn_id]["last_processing_time"] = current_time
+        connection_data[conn_id]["processing_cooldown"] = True
+        
+        await process_stream_buffer(websocket, conn_id)
+        
+        # Clear cooldown after processing
+        await asyncio.sleep(2.0)
+        connection_data[conn_id]["processing_cooldown"] = False
+
+async def process_stream_buffer(websocket, conn_id: str):
+    """FIXED: Process stream buffer with better error handling"""
+    try:
+        buffer_data = bytes(connection_data[conn_id]["stream_buffer"])
+        
+        # REDUCED minimum buffer requirement
+        min_size_for_transcription = SAMPLE_RATE * 2 * 1.0  # Reduced from 1.5 to 1.0 seconds
+        if len(buffer_data) < min_size_for_transcription:
+            print(f"⚠️ Buffer too short for transcription: {len(buffer_data)} bytes")
+            return
+            
+        print(f"🎯 Processing buffer: {len(buffer_data)} bytes ({len(buffer_data)/(SAMPLE_RATE*2):.1f}s)")
+        
+        # Transcribe audio
+        transcript = await transcribe_pcm_buffer(buffer_data, SAMPLE_RATE)
+        print(f"📝 Transcription: '{transcript}'")
+        
+        # Handle empty transcriptions
+        if not transcript or len(transcript.strip()) < 2:  # Reduced from 3 to 2
+            await handle_empty_transcription(websocket, conn_id, transcript)
+            return
+        
+        # Reset empty transcription count
+        empty_transcription_counts[conn_id] = 0
+        
+        # Check if response should be generated
+        should_respond, reason = ResponseTracker.should_generate_response(conn_id, transcript)
+        print(f"🤔 Should respond: {should_respond}, reason: {reason}")
+        
+        if not should_respond:
+            await websocket.send_text(json.dumps({
+                "type": "stream_transcript",
+                "data": transcript,
+                "partial": True,
+                "skip_reason": reason
+            }))
+            # ALWAYS clear buffer after processing, regardless of response decision
+            connection_data[conn_id]["stream_buffer"] = bytearray()
+            return
+        
+        # Generate and send live response
+        await generate_live_response(websocket, conn_id, transcript)
+        
+    except Exception as e:
+        print(f"❌ Error in process_stream_buffer: {e}")
+        import traceback
+        traceback.print_exc()
+        # Always clear buffer on error to prevent getting stuck
+        connection_data[conn_id]["stream_buffer"] = bytearray()
+        await cleanup_on_error(conn_id)
+
+async def generate_live_response(websocket, conn_id: str, transcript: str):
+    """Generate live response for streaming audio"""
+    try:
+        user_id = connection_data[conn_id]["user_id"]
+        
+        # Send transcript
+        await websocket.send_text(json.dumps({
+            "type": "stream_transcript",
+            "data": transcript,
+            "partial": False,
+            "live_response": True
+        }))
+        
+        # Set Maya as speaking
+        connection_data[conn_id]["maya_speaking"] = True
+        connection_data[conn_id]["should_interrupt"] = False
+        
+        await websocket.send_text(json.dumps({
+            "type": "maya_thinking", 
+            "message": "Maya is thinking..."
+        }))
+        
+        # Generate response
+        maya_response = await generate_maya_response_websocket(transcript, user_id)
+        
+        await websocket.send_text(json.dumps({
+            "type": "ai_text",
+            "data": maya_response,
+            "live_response": True
+        }))
+        
+        # Stream TTS with interruption support
+        await stream_live_tts(websocket, conn_id, maya_response)
+        
+        # Update tracking
+        ResponseTracker.update_tracker(conn_id, transcript, maya_response)
+        
+        # Clear buffer
+        connection_data[conn_id]["stream_buffer"] = bytearray()
+        connection_data[conn_id]["last_transcription"] = transcript
+        
+    except Exception as e:
+        print(f"❌ Error generating live response: {e}")
+        await cleanup_on_error(conn_id)
+
+async def stream_live_tts(websocket, conn_id: str, text: str):
+    """Stream TTS for live responses with interruption support"""
+    await websocket.send_text(json.dumps({
+        "type": "tts_start",
+        "message": "Maya speaking...",
+        "live_response": True
+    }))
+    
+    chunk_count = 0
+    try:
+        async for b64_chunk in generate_tts_chunks(text):
+            # Check for interruption
+            if connection_data[conn_id].get("should_interrupt", False):
+                print(f"🛑 Live TTS interrupted for {conn_id}")
+                break
+                
+            if b64_chunk:
+                chunk_count += 1
+                await websocket.send_text(json.dumps({
+                    "type": "tts_chunk",
+                    "data": b64_chunk,
+                    "chunk_number": chunk_count,
+                    "live_response": True
+                }))
+                await asyncio.sleep(0.01)
+        
+        # Send completion status
+        if not connection_data[conn_id].get("should_interrupt", False):
+            await websocket.send_text(json.dumps({
+                "type": "tts_end",
+                "message": "Maya finished speaking",
+                "total_chunks": chunk_count,
+                "live_response": True
+            }))
+        else:
+            await websocket.send_text(json.dumps({
+                "type": "tts_interrupted",
+                "message": "Maya was interrupted",
+                "chunks_sent": chunk_count
+            }))
+            
+    except Exception as tts_error:
+        print(f"❌ Live TTS error: {tts_error}")
+        await websocket.send_text(json.dumps({
+            "type": "tts_error",
+            "message": "Audio generation failed",
+            "error": str(tts_error)
+        }))
+    finally:
+        connection_data[conn_id]["maya_speaking"] = False
+
+async def handle_empty_transcription(websocket, conn_id: str, transcript: str):
+    """Handle empty or short transcriptions"""
+    if conn_id not in empty_transcription_counts:
+        empty_transcription_counts[conn_id] = 0
+    empty_transcription_counts[conn_id] += 1
+    
+    print(f"❌ Empty transcript #{empty_transcription_counts[conn_id]}: '{transcript}'")
+    
+    if empty_transcription_counts[conn_id] >= MAX_EMPTY_TRANSCRIPTIONS:
+        print(f"🧹 Too many empty transcriptions, resetting buffer")
+        connection_data[conn_id]["stream_buffer"] = bytearray()
+        connection_data[conn_id]["last_processing_time"] = time.time()
+        empty_transcription_counts[conn_id] = 0
+        
+        await websocket.send_text(json.dumps({
+            "type": "listening_status",
+            "message": "Listening for clear speech..."
+        }))
+
+async def handle_end_stream(websocket, payload: dict, conn_id: str):
+    """Finalize live streaming session"""
+    try:
+        if not connection_data[conn_id]["streaming"]:
+            return
+            
+        connection_data[conn_id]["streaming"] = False
+        
+        # Cancel any ongoing TTS
+        if connection_data[conn_id].get("current_tts_task"):
+            connection_data[conn_id]["current_tts_task"].cancel()
+            connection_data[conn_id]["current_tts_task"] = None
+        
+        connection_data[conn_id]["maya_speaking"] = False
+        
+        await websocket.send_text(json.dumps({
+            "type": "stream_ended",
+            "message": "Live streaming session ended",
+            "total_chunks_processed": connection_data[conn_id]["stream_chunk_count"]
+        }))
+        
+        # Clean up tracking data
+        if conn_id in response_tracker:
+            del response_tracker[conn_id]
+        if conn_id in empty_transcription_counts:
+            del empty_transcription_counts[conn_id]
+        
+        print(f"🏁 Ended live streaming session for {conn_id}")
+        
+    except Exception as e:
+        print(f"❌ Error ending stream for {conn_id}: {e}")
+
+async def cleanup_on_error(conn_id: str):
+    """Clean up connection state on error"""
+    if conn_id in connection_data:
+        connection_data[conn_id]["maya_speaking"] = False
+        connection_data[conn_id]["stream_buffer"] = bytearray()
+
+def cleanup_old_connections():
+    """Clean up old connection data"""
+    current_time = time.time()
+    cutoff_time = current_time - 3600  # 1 hour
+    
+    # Clean up old response tracker data
+    for conn_id in list(response_tracker.keys()):
+        tracker = response_tracker[conn_id]
+        # Remove old responses
+        tracker["recent_responses"] = [
+            (transcript, response, timestamp) 
+            for transcript, response, timestamp in tracker["recent_responses"]
+            if timestamp > cutoff_time
+        ]
+        
+        # Remove empty trackers
+        if not tracker["recent_responses"]:
+            del response_tracker[conn_id]
 
 # -------------------- CONVERSATION MANAGEMENT ENDPOINTS --------------------
 
@@ -1134,16 +1797,85 @@ def health_check():
         "database": "ready",
         "maya_system": "ready",
         "active_conversations": len(user_conversations),
-        "active_websockets": len(connection_data)
+        "active_websockets": len(connection_data),
+        "streaming_support": "enabled",
+        "tts_support": "enabled"
     }
 
 # Health check for WebSocket
 @app.get("/ws/health")
 async def websocket_health():
-    """Health check for WebSocket service"""
+    """WebSocket health check"""
     return {
-        "status": "healthy",
+        "websocket_status": "healthy",
         "active_connections": len(connection_data),
-        "websocket_endpoint": "/ws",
-        "maya_integration": "enabled"
+        "streaming_enabled": True
     }
+
+# -------------------- DEBUGGING ENDPOINTS --------------------
+
+@app.get("/debug/connections")
+async def debug_connections():
+    """Debug endpoint to check active connections"""
+    debug_info = {}
+    for conn_id, data in connection_data.items():
+        debug_info[conn_id] = {
+            "user_id": data.get("user_id"),
+            "streaming": data.get("streaming"),
+            "buffer_size": len(data.get("stream_buffer", [])),
+            "chunk_count": data.get("stream_chunk_count", 0)
+        }
+    return {"active_connections": debug_info}
+
+@app.post("/debug/test_tts")
+async def test_tts_endpoint(text: str = "Hello, this is a test message"):
+    """Test TTS generation independently"""
+    try:
+        chunks = []
+        async for chunk in text_to_speech_base64_chunks(text):
+            if chunk:
+                chunks.append(len(chunk))
+        
+        return {
+            "status": "success",
+            "text": text,
+            "chunks_generated": len(chunks),
+            "chunk_sizes": chunks
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+
+# -------------------- STARTUP VALIDATION --------------------
+
+@app.on_event("startup")
+async def startup_event():
+    """Validate system on startup"""
+    print("🚀 Starting Maya WebSocket server...")
+    
+    # Test TTS
+    try:
+        test_chunks = []
+        async for chunk in text_to_speech_base64_chunks("System startup test"):
+            if chunk:
+                test_chunks.append(chunk)
+        print(f"✅ TTS system working - generated {len(test_chunks)} chunks")
+    except Exception as e:
+        print(f"❌ TTS system error: {e}")
+    
+    # Test Whisper
+    try:
+        # Create a small test audio file
+        test_audio = np.random.rand(16000).astype(np.float32) * 0.1  # 1 second of quiet noise
+        test_result = whisper_model.transcribe(test_audio)
+        print("✅ Whisper model working")
+    except Exception as e:
+        print(f"❌ Whisper model error: {e}")
+    
+    print("🎉 Maya WebSocket server started successfully!")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
